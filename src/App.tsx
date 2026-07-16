@@ -3,6 +3,8 @@ import { pedidosService, type Pedido } from './services/api'
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from './components/ui/card'
 import { Button } from './components/ui/button'
 import { AnimatedStatusBadge } from './components/ui/animated-status-badge'
+import { Clock } from './components/ui/clock'
+import { ReservasPanel } from './components/ui/reservas-panel'
 import { Loader2 } from 'lucide-react'
 import { cn } from './lib/utils'
 
@@ -194,6 +196,8 @@ function App() {
           </div>
         )}
       </div>
+      <ReservasPanel />
+      <Clock />
     </div>
   )
 }
