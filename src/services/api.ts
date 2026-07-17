@@ -81,15 +81,33 @@ const RESERVAS_API_URL = 'http://localhost:3001/api/reservas';
 
 export const reservasService = {
   async getReservasHoy(): Promise<Reserva[]> {
-    const response = await fetch(RESERVAS_API_URL);
+    const hoy = new Date().toISOString().split('T')[0];
+    const response = await fetch(`${RESERVAS_API_URL}?fecha=${hoy}&estado=pendiente`);
     const json = await response.json();
     if (!json.ok) throw new Error(json.error || "Error al obtener las reservas");
     
-    if (Array.isArray(json.data)) {
-      const hoy = new Date().toISOString().split('T')[0];
-      return json.data.filter((r: any) => {
-        const fechaReserva = r.fecha.includes('T') ? r.fecha.split('T')[0] : r.fecha;
-        return fechaReserva === hoy && r.estado === 'pendiente';
+    if (Array.isArray(json.reservas)) {
+      return json.reservas.map((r: any) => {
+        const cliente_nombre = r.cliente 
+          ? `${r.cliente.nombre} ${r.cliente.apellidos || ''}`.trim() 
+          : 'Cliente';
+        const cliente_telefono = r.cliente?.telefono || '';
+        
+        let hora = r.hora || '';
+        if (hora.includes('T')) {
+          hora = hora.split('T')[1].substring(0, 5);
+        }
+        
+        return {
+          id: r.id,
+          cliente_nombre,
+          cliente_telefono,
+          fecha: r.fecha,
+          hora,
+          num_personas: r.num_personas,
+          estado: r.estado,
+          notas: r.notas
+        };
       });
     }
     return [];

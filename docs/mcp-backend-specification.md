@@ -199,6 +199,51 @@ A continuación se detallan los endpoints agrupados por el servidor correspondie
 ```
 * **Efecto colateral:** Emite el evento SSE `nuevo_pedido`.
 
+#### 10. Listar reservas con filtros (Panel Admin)
+* **Método:** `GET`
+* **Ruta:** `/api/reservas`
+* **Parámetros de consulta (Query Params):**
+  * `fecha` (Opcional): Filtra reservas para una fecha específica en formato `YYYY-MM-DD` (ej. `2026-07-16`).
+  * `restaurante_id` (Opcional): UUID del restaurante.
+  * `estado` (Opcional): Filtra por estado de la reserva (`pendiente`, `confirmada`, `cancelada`, `completada`).
+  * `cliente_id` (Opcional): UUID del cliente.
+  * `limit` (Opcional, por defecto `50`).
+  * `offset` (Opcional, por defecto `0`).
+* **Respuesta exitosa (200 OK):**
+```json
+{
+  "ok": true,
+  "total": 1,
+  "reservas": [
+    {
+      "id": "c9c96bd8-dd1f-47e0-aefc-439b6bef1dac",
+      "restaurante_id": "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+      "cliente_id": "8e50cffd-1165-43e4-9555-2d749d32dbad",
+      "mesa_id": "d0000000-0000-0000-0000-000000000001",
+      "conversacion_id": "7daaa1f4-0b43-4f6d-b902-c20c2c615aa7",
+      "fecha": "2026-07-16T00:00:00.000Z",
+      "hora": "1970-01-01T20:00:00.000Z",
+      "num_personas": 4,
+      "estado": "pendiente",
+      "notas": "Mesa cerca de la ventana",
+      "created_at": "2026-07-16T18:45:00.000Z",
+      "updated_at": "2026-07-16T18:45:00.000Z",
+      "cliente": {
+        "id": "8e50cffd-1165-43e4-9555-2d749d32dbad",
+        "nombre": "Isaac",
+        "apellidos": "Perez",
+        "telefono": "9994940808"
+      },
+      "mesa": {
+        "id": "d0000000-0000-0000-0000-000000000001",
+        "numero": 3,
+        "ubicacion": "Terraza"
+      }
+    }
+  ]
+}
+```
+
 ---
 
 ### II. Endpoints del Servidor Webhook N8N (Puerto 3002)
@@ -237,6 +282,11 @@ Estos endpoints son utilizados principalmente por los flujos conversacionales au
 * **Método:** `PATCH`
 * **Ruta:** `/api/webhooks/reservas/:id`
 * **⚠️ Regla de Negocio:** Para poder modificar detalles de una reserva, la petición debe realizarse con **al menos 5 horas de anticipación** respecto a la fecha y hora agendada. De lo contrario, el backend retornará error.
+
+#### 8. Listar reservas con filtros (para Bot/n8n)
+* **Método:** `GET`
+* **Ruta:** `/api/webhooks/reservas`
+* **Descripción:** Mismo comportamiento y parámetros de filtrado que `/api/reservas` en el servidor de cocina (puerto 3001). Acepta query params como `fecha` (YYYY-MM-DD), `restaurante_id`, `estado`, `cliente_id`, `limit` y `offset`.
 
 ---
 
