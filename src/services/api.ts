@@ -1,4 +1,4 @@
-const API_URL = 'http://localhost:3001/api/pedidos';
+const API_URL = '/api/pedidos';
 
 export interface Producto {
   producto_id: string;
