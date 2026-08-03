@@ -1,4 +1,8 @@
-const API_URL = 'http://localhost:3001/api/pedidos';
+import axios from 'axios';
+
+export const api = axios.create({
+  baseURL: '/api' // This goes to the vite proxy or directly
+});
 
 export interface Producto {
   producto_id: string;
@@ -27,20 +31,12 @@ export interface Pedido {
 
 export const pedidosService = {
   async getAll(): Promise<Pedido[]> {
-    const response = await fetch(API_URL);
-    const json = await response.json();
-    if (!json.ok) throw new Error(json.error);
-    return json.data;
+    const response = await api.get('/pedidos');
+    return response.data.data;
   },
 
   async updateEstado(id: string, nuevoEstado: string): Promise<void> {
-    const response = await fetch(`${API_URL}/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ estado: nuevoEstado })
-    });
-    const json = await response.json();
-    if (!json.ok) throw new Error(json.error);
+    await api.patch(`/pedidos/${id}`, { estado: nuevoEstado });
   },
 
   // SSE Listener setup
@@ -48,7 +44,9 @@ export const pedidosService = {
     onUpdate: (pedido: Pedido) => void, 
     onDelete: (id: string) => void
   ) {
-    const evtSource = new EventSource(`${API_URL}/stream`);
+    // Pasar el token por query param para SSE porque EventSource no soporta headers
+    const token = localStorage.getItem('santo_bocado_token');
+    const evtSource = new EventSource(`/api/pedidos/stream${token ? '?token=' + token : ''}`);
     
     evtSource.addEventListener('nuevo_pedido', (e) => {
       onUpdate(JSON.parse(e.data));
