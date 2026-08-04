@@ -42,7 +42,9 @@ export function ReservasPage() {
   const [loading, setLoading] = useState(true);
   const [filtroFecha, setFiltroFecha] = useState(() => {
     const hoy = new Date();
-    return hoy.toISOString().split('T')[0];
+    const offset = hoy.getTimezoneOffset();
+    const localDate = new Date(hoy.getTime() - (offset * 60 * 1000));
+    return localDate.toISOString().split('T')[0];
   });
   const [filtroEstado, setFiltroEstado] = useState('');
   const [updatingId, setUpdatingId] = useState<string | null>(null);
@@ -88,7 +90,9 @@ export function ReservasPage() {
 
   const formatFecha = (fecha: string) => {
     try {
-      const d = new Date(fecha);
+      const datePart = fecha.split('T')[0];
+      const [year, month, day] = datePart.split('-');
+      const d = new Date(Number(year), Number(month) - 1, Number(day), 12, 0, 0);
       return d.toLocaleDateString('es-MX', {
         weekday: 'short',
         day: 'numeric',
