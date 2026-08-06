@@ -48,16 +48,51 @@ export const pedidosService = {
     const token = localStorage.getItem('santo_bocado_token');
     const evtSource = new EventSource(`/api/pedidos/stream${token ? '?token=' + token : ''}`);
     
-    evtSource.addEventListener('nuevo_pedido', (e) => {
-      onUpdate(JSON.parse(e.data));
-    });
+    const handleUpdate = (e: MessageEvent) => {
+      try {
+        const rawData = JSON.parse(e.data);
+        if (!rawData || !rawData.id) return;
+        
+        // Normalizar productos por si vienen en formato raw de Prisma (pedido_detalle)
+        let productos = Array.isArray(rawData.productos) ? rawData.productos : [];
+        if (productos.length === 0 && Array.isArray(rawData.pedido_detalle)) {
+          productos = rawData.pedido_detalle.map((pd: any) => ({
+            producto_id: pd.producto_id,
+            nombre: pd.producto?.nombre || 'Producto',
+            cantidad: pd.cantidad || 1,
+            notas: pd.notas || null,
+            precio_unitario: pd.precio_unitario || '0',
+            subtotal: pd.subtotal || '0',
+            extras: Array.isArray(pd.pedido_detalle_modificador) 
+              ? pd.pedido_detalle_modificador.map((m: any) => m.nombre_historico) 
+              : []
+          }));
+        }
 
-    evtSource.addEventListener('pedido_actualizado', (e) => {
-      onUpdate(JSON.parse(e.data));
-    });
+        const pedido: Pedido = {
+          ...rawData,
+          cliente_nombre: rawData.cliente_nombre || rawData.cliente?.nombre || null,
+          cliente_telefono: rawData.cliente_telefono || rawData.cliente?.telefono || null,
+          productos
+        };
+
+        onUpdate(pedido);
+      } catch (err) {
+        console.error('Error al procesar actualización SSE de pedido:', err);
+      }
+    };
+
+    evtSource.addEventListener('nuevo_pedido', handleUpdate);
+    evtSource.addEventListener('pedido_actualizado', handleUpdate);
 
     evtSource.addEventListener('pedido_eliminado', (e) => {
-      onDelete(JSON.parse(e.data));
+      try {
+        const data = JSON.parse(e.data);
+        const id = typeof data === 'string' ? data : data?.id;
+        if (id) onDelete(id);
+      } catch (err) {
+        console.error('Error al procesar eliminación SSE:', err);
+      }
     });
 
     return () => evtSource.close();

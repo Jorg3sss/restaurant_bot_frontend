@@ -1,82 +1,99 @@
-# Especificación de Comunicación Back-End (Guía MCP para Agente Front-End)
-Este documento sirve como especificación y mapa de contexto (Model Context Protocol / Context Guide) para que el agente del front-end o cualquier desarrollador comprenda cómo interactuar con el back-end del sistema de bot conversacional y pantalla de cocina del restaurante **Santo Bocado**.
+# Especificación de Comunicación Back-End (Guía MCP del Servidor)
+
+Este documento sirve como especificación y mapa de contexto (Model Context Protocol / Context Guide) para que los agentes de IA, desarrolladores o integradores comprendan y operen sobre el back-end del sistema de bot conversacional y pantalla de cocina del restaurante **Santo Bocado**.
 
 ---
 
 ## 1. Arquitectura de Servidores y Puertos
 
-El back-end está dividido en **dos servidores Express independientes** que corren sobre el mismo entorno, dividiendo las responsabilidades operativas:
+El back-end está compuesto por **dos servidores Express independientes** que corren sobre la misma base de datos relacional PostgreSQL (vía Prisma ORM), dividiendo las responsabilidades operativas para acústica de escalabilidad y aislamiento:
+
+```mermaid
+graph TD
+    Client[📱 WhatsApp / Cliente] <-->|WhatsApp API| N8N[🤖 Servidor n8n]
+    N8N <-->|Webhooks HTTP - Puerto 3002| N8nServer[🤖 Servidor Webhooks Backend]
+    KitchenUI[🖥️ Pantalla de Cocina / Front-End] <-->|HTTP API - Puerto 3001| KitchenServer[🖥️ Servidor de Cocina Backend]
+    KitchenServer <--->|Prisma ORM| DB[(💾 PostgreSQL Database)]
+    N8nServer <--->|Prisma ORM| DB
+    N8nServer -->|Notificaciones Webhook /internal| KitchenServer
+    KitchenServer -.->|SSE Real-time Events| KitchenUI
+```
 
 ### 🖥️ Servidor de Cocina (Kitchen/Main Server)
 * **Puerto por defecto:** `3001`
 * **URL Base:** `http://localhost:3001/api`
-* **Responsabilidad:** Gestiona la pantalla de cocina en tiempo real, el menú completo, la disponibilidad de los productos y las reservas en el panel administrativo.
-* **Características especiales:** Emite eventos en tiempo real a través de **Server-Sent Events (SSE)**.
+* **Responsabilidad:** Soportar la pantalla de cocina (pedidos activos), el menú completo, la disponibilidad de los productos y la visualización de reservas.
+* **Sincronización:** Emite eventos en tiempo real a través de **Server-Sent Events (SSE)**.
 
 ### 🤖 Servidor de Webhooks N8N (N8N Backend Server)
 * **Puerto por defecto:** `3002`
 * **URL Base:** `http://localhost:3002/api/webhooks`
-* **Responsabilidad:** Provee los endpoints de webhook que el bot de n8n (orquestado por WhatsApp Business API y el agente GPT-4o) consume para crear clientes, registrar mensajes de chat, guardar/modificar reservas y subir pedidos conversacionales.
+* **Responsabilidad:** Proporcionar endpoints específicos consumidos por los flujos automatizados de n8n (orquestados por la API de WhatsApp Business y un agente de IA). Facilita búsquedas de clientes, registro de historial de mensajes, reservas y carga de pedidos conversacionales.
 
 ---
 
 ## 2. Modelos de Datos Relevantes (Esquema Prisma/PostgreSQL)
 
-Los modelos principales que el front-end maneja o consulta son:
+Los modelos principales que se consultan y manipulan en el sistema son:
 
-### 📋 Pedido (`pedido` / `pedido_detalle`)
-* **id:** `UUID` (String)
-* **numero_pedido:** `Int` (Autoincremental por base de datos o aleatorio en pruebas)
+### 📋 Pedido (`pedido`)
+Representa una orden realizada por un cliente en el sistema.
+* **id:** `UUID` (Identificador único en formato string)
+* **restaurante_id:** `UUID` (ID del restaurante asociado)
+* **cliente_id:** `UUID` (Cliente que realiza la compra)
+* **conversacion_id:** `UUID` (ID de la conversación activa asociada)
+* **direccion_id:** `UUID | null` (ID de la dirección si el tipo es 'delivery')
+* **numero_pedido:** `Int` (Correlativo diario autoincremental por restaurante que inicia a las 06:00:00 UTC)
 * **estado:** `'pendiente' | 'confirmado' | 'en_preparacion' | 'entregado' | 'cancelado'`
 * **tipo:** `'delivery' | 'recoger'`
 * **metodo_pago:** `'efectivo' | 'transferencia' | 'tarjeta'`
-* **subtotal:** `Decimal`
-* **costo_envio:** `Decimal | null` (Ej. en Umán es de ~$10 para delivery)
-* **total:** `Decimal`
+* **subtotal:** `Decimal` (Suma de precios de productos)
+* **costo_envio:** `Decimal` (Costo por envío, ej. $25.00 en Uman para delivery, $0.00 para recoger)
+* **total:** `Decimal` (Subtotal + costo_envio)
 * **created_at:** `DateTime`
-* **cliente_nombre:** `String | null`
-* **cliente_telefono:** `String | null`
-* **productos:** Array de productos solicitados en el pedido:
-  * **producto_id:** `UUID` (String)
-  * **nombre:** `String`
-  * **cantidad:** `Int`
-  * **precio_unitario:** `Decimal`
-  * **subtotal:** `Decimal`
-  * **notas:** `String | null` (Notas especiales del platillo, ej: *"Sin cebolla"*)
-  * **extras:** Array de strings con los nombres históricos de los modificadores cobrados (ej. `["Extra Queso", "Extra Tocino"]`).
+* **updated_at:** `DateTime`
 
-### 🍔 Producto y Menú (`producto` / `categoria`)
-* **id:** `UUID` (String)
-* **categoria_id:** `UUID`
+#### Detalle de Pedido (`pedido_detalle` / `pedido_detalle_modificador`)
+* Cada pedido tiene uno o más **detalles** de productos con `cantidad`, `precio_unitario` y `subtotal`.
+* Admite notas opcionales (`notas` ej: *"Sin cebolla"*).
+* Admite **modificadores** (`pedido_detalle_modificador` ej: *["Extra Queso", "Extra Tocino"]*) con un precio cobrado histórico.
+
+### 🍔 Producto (`producto` / `categoria`)
+* **id:** `UUID`
 * **nombre:** `String`
 * **descripcion:** `String | null`
-* **ingredientes:** `String | null`
 * **precio:** `Decimal`
-* **imagen_url:** `String | null`
-* **activo:** `Boolean` (Determina la disponibilidad del producto en el menú y si el Bot de WhatsApp lo ofrece).
+* **activo:** `Boolean` (Determina si se ofrece en el menú y si el bot de WhatsApp lo sugiere).
+* **categoria_id:** `UUID` (Asociación jerárquica para clasificación en carta).
 
 ### 📅 Reserva (`reserva`)
-* **id:** `UUID` (String)
+* **id:** `UUID`
 * **restaurante_id:** `UUID`
 * **cliente_id:** `UUID`
-* **mesa_id:** `UUID | null`
+* **mesa_id:** `UUID | null` (Asignación física de mesa en restaurante)
 * **fecha:** `Date` (Formato: `YYYY-MM-DD`)
 * **hora:** `Time` (Formato: `HH:MM:SS`)
 * **num_personas:** `Int`
-* **estado:** `String` (Ej. `pendiente`, `confirmada`, `cancelada`)
+* **estado:** `String` (`pendiente` | `confirmada` | `cancelada` | `completada`)
 * **notas:** `String | null`
+
+### 👤 Cliente (`cliente` / `direccion`)
+* **id:** `UUID`
+* **nombre:** `String`
+* **apellidos:** `String` (Opcional o cadena vacía)
+* **telefono:** `String` (Número telefónico de contacto/WhatsApp)
+* **direcciones:** Relación de una a muchas direcciones con coordenadas geográficas (`latitude`, `longitude`), `direccion` de texto y `referencias`.
 
 ---
 
 ## 3. Especificación de Endpoints (API Reference)
 
-A continuación se detallan los endpoints agrupados por el servidor correspondiente.
-
-### I. Endpoints del Servidor de Cocina (Puerto 3001)
+### I. Servidor de Cocina (Puerto 3001)
 
 #### 1. Obtener pedidos del día
 * **Método:** `GET`
 * **Ruta:** `/api/pedidos`
+* **Filtro:** Retorna los pedidos creados en el día en curso.
 * **Respuesta exitosa (200 OK):**
 ```json
 {
@@ -112,246 +129,209 @@ A continuación se detallan los endpoints agrupados por el servidor correspondie
 #### 2. Obtener un pedido específico
 * **Método:** `GET`
 * **Ruta:** `/api/pedidos/:id`
-* **Respuesta exitosa (200 OK):** Detalle completo del pedido con la misma estructura.
 
 #### 3. Actualizar estado de un pedido (Flujo de Cocina)
 * **Método:** `PATCH`
 * **Ruta:** `/api/pedidos/:id`
-* **Cuerpo de la petición (JSON):**
+* **Cuerpo (JSON):**
 ```json
 {
   "estado": "en_preparacion"
 }
 ```
-* **Estados válidos:** `'pendiente', 'confirmado', 'en_preparacion', 'entregado', 'cancelado'`.
-* **Efecto colateral:** Emite el evento SSE `pedido_actualizado`.
+* **Efecto colateral:** Actualiza la base de datos y difunde el evento SSE `pedido_actualizado`.
 
-#### 4. Conectarse al flujo en tiempo real (SSE)
+#### 4. Crear pedido de prueba para la UI
+* **Método:** `POST`
+* **Ruta:** `/api/pedidos/test-create`
+* **Uso:** Registra un pedido simulado para validar animaciones y SSE en cocina.
+
+#### 5. Eliminar un pedido
+* **Método:** `DELETE`
+* **Ruta:** `/api/pedidos/:id`
+* **Efecto colateral:** Emite el evento SSE `pedido_eliminado`.
+
+#### 6. Conectarse al flujo en tiempo real (SSE)
 * **Método:** `GET`
 * **Ruta:** `/api/pedidos/stream`
-* **Encabezado esperado:** `Accept: text/event-stream`
-* **Detalles en la sección 4 de este documento.**
+* **Cabecera:** `Accept: text/event-stream`
+* **Detalles:** Canal persistente que emite eventos `nuevo_pedido`, `pedido_actualizado`, `pedido_eliminado`.
 
-#### 5. Obtener menú completo de un restaurante (ordenado por categorías)
+#### 7. Obtener menú ordenado por categorías
 * **Método:** `GET`
 * **Ruta:** `/api/menu/:restauranteId`
-* **Respuesta exitosa (200 OK):**
-```json
-{
-  "ok": true,
-  "categorias": [
-    {
-      "id": "uuid-categoria-1",
-      "nombre": "Hamburguesas",
-      "descripcion": "Incluyen papas fritas",
-      "orden": 1,
-      "activo": true,
-      "producto": [
-        {
-          "id": "uuid-producto-1",
-          "nombre": "Monster",
-          "precio": "159.00",
-          "activo": true,
-          "producto_modificador": [
-            {
-              "id": "uuid-mod-1",
-              "nombre": "Extra Queso",
-              "precio_adicional": "15.00",
-              "activo": true
-            }
-          ]
-        }
-      ]
-    }
-  ]
-}
-```
 
-#### 6. Obtener productos agotados ("no disponibles")
+#### 8. Obtener productos agotados
 * **Método:** `GET`
 * **Ruta:** `/api/productos/no-disponibles/:restauranteId`
-* **Respuesta exitosa (200 OK):** `{ "ok": true, "productos": [...] }`
 
-#### 7. Modificar disponibilidad de un producto (Activar / Desactivar)
+#### 9. Modificar disponibilidad de un producto
 * **Método:** `PATCH`
 * **Ruta:** `/api/productos/:id/disponibilidad`
-* **Cuerpo de la petición (JSON):**
-```json
-{
-  "activo": false
-}
-```
-* **⚠️ Ojo / Comportamiento Interno:** El backend implementa este endpoint mediante un interruptor lógico simple (`!producto.activo`). Por ende, llamarlo **cambiará/alternará** el estado actual del producto, ignorando el booleano específico enviado en el body. El front-end debe estar consciente de este comportamiento.
+* **⚠️ Advertencia de Lógica:** Este endpoint actúa como **conmutador lógico ("toggle")**. Alterna el valor de `activo` en la BD (ignora el booleano explícito que se envíe en el JSON body).
 
-#### 8. Buscar un producto por nombre
+#### 10. Buscar producto por nombre
 * **Método:** `GET`
 * **Ruta:** `/api/productos/buscar/:restauranteId?q=NombreDelProducto`
 
-#### 9. Notificación interna de webhook (n8n a Cocina)
+#### 11. Notificación interna de webhook (n8n a Cocina)
 * **Método:** `POST`
 * **Ruta:** `/api/internal/webhook-notify`
-* **Cuerpo de la petición (JSON):**
+* **Cuerpo (JSON):**
 ```json
 {
-  "tipo": "NUEVO_PEDIDO",
+  "tipo": "NUEVO_PEDIDO" | "PEDIDO_CANCELADO",
   "pedido_id": "uuid-del-pedido"
 }
 ```
-* **Efecto colateral:** Emite el evento SSE `nuevo_pedido`.
+* **Efecto colateral:** Si el tipo es `NUEVO_PEDIDO`, consulta los datos del pedido y emite el evento SSE `nuevo_pedido`.
 
-#### 10. Listar reservas con filtros (Panel Admin)
+#### 12. Listar reservas con filtros (Panel Admin)
 * **Método:** `GET`
 * **Ruta:** `/api/reservas`
-* **Parámetros de consulta (Query Params):**
-  * `fecha` (Opcional): Filtra reservas para una fecha específica en formato `YYYY-MM-DD` (ej. `2026-07-16`).
-  * `restaurante_id` (Opcional): UUID del restaurante.
-  * `estado` (Opcional): Filtra por estado de la reserva (`pendiente`, `confirmada`, `cancelada`, `completada`).
-  * `cliente_id` (Opcional): UUID del cliente.
-  * `limit` (Opcional, por defecto `50`).
-  * `offset` (Opcional, por defecto `0`).
-* **Respuesta exitosa (200 OK):**
-```json
-{
-  "ok": true,
-  "total": 1,
-  "reservas": [
-    {
-      "id": "c9c96bd8-dd1f-47e0-aefc-439b6bef1dac",
-      "restaurante_id": "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
-      "cliente_id": "8e50cffd-1165-43e4-9555-2d749d32dbad",
-      "mesa_id": "d0000000-0000-0000-0000-000000000001",
-      "conversacion_id": "7daaa1f4-0b43-4f6d-b902-c20c2c615aa7",
-      "fecha": "2026-07-16T00:00:00.000Z",
-      "hora": "1970-01-01T20:00:00.000Z",
-      "num_personas": 4,
-      "estado": "pendiente",
-      "notas": "Mesa cerca de la ventana",
-      "created_at": "2026-07-16T18:45:00.000Z",
-      "updated_at": "2026-07-16T18:45:00.000Z",
-      "cliente": {
-        "id": "8e50cffd-1165-43e4-9555-2d749d32dbad",
-        "nombre": "Isaac",
-        "apellidos": "Perez",
-        "telefono": "9994940808"
-      },
-      "mesa": {
-        "id": "d0000000-0000-0000-0000-000000000001",
-        "numero": 3,
-        "ubicacion": "Terraza"
-      }
-    }
-  ]
-}
-```
+* **Query Params:** `fecha` (YYYY-MM-DD), `restaurante_id` (UUID), `estado` (pendiente, confirmada, cancelada), `limit`, `offset`.
 
 ---
 
-### II. Endpoints del Servidor Webhook N8N (Puerto 3002)
-
-Estos endpoints son utilizados principalmente por los flujos conversacionales automatizados de n8n, pero pueden ser llamados o integrados por el front-end si requiere simular o interactuar con el flujo conversacional.
+### II. Servidor de Webhooks N8N (Puerto 3002)
 
 #### 1. Registrar pedido desde Bot
 * **Método:** `POST`
 * **Ruta:** `/api/webhooks/pedidos`
-* **Cuerpo de la petición (JSON):** Contiene la información capturada por WhatsApp del cliente. Crea la orden y avisa internamente al servidor de cocina.
+* **Cuerpo (JSON):**
+```json
+{
+  "restaurante_id": "uuid-restaurante",
+  "telefono_cliente": "9991234567",
+  "nombre_cliente": "Nombre",
+  "apellidos_cliente": "Apellidos",
+  "datos": {
+    "tipo": "delivery" | "recoger",
+    "metodo_pago": "efectivo" | "transferencia" | "tarjeta",
+    "direccion_texto": "Dirección opcional",
+    "referencias": "Referencias opcionales",
+    "productos": [
+      {
+        "nombre": "Nombre de Producto exacto",
+        "cantidad": 2,
+        "notas": "NA o especificación"
+      }
+    ]
+  }
+}
+```
+* **Comportamiento especial:** Si es *delivery* y no se provee `direccion_texto`, busca direcciones previas:
+  * Si hay direcciones previas, lanza un error con código `CONFIRMAR_DIRECCION` devolviendo la dirección más usada para confirmación.
+  * Si no hay direcciones, lanza error `DIRECCION_FALTANTE`.
+* **Notificación:** Emite automáticamente una petición POST a `/api/internal/webhook-notify` en el puerto 3001.
 
 #### 2. Modificar pedido activo por Bot
 * **Método:** `PATCH`
 * **Ruta:** `/api/webhooks/pedidos/:id`
-* **Regla:** Solo permitido si el pedido se encuentra en estado `'pendiente'` o `'confirmado'`.
+* **Regla:** Solo permitido si el estado actual en BD es `'pendiente'` o `'confirmado'`. Permite actualizar tipo, método de pago y reemplazar la lista de productos (calculando de nuevo el total).
 
-#### 3. Buscar/Crear cliente conversacional
+#### 3. Cancelar pedido activo por Bot
+* **Método:** `PATCH`
+* **Ruta:** `/api/webhooks/pedidos/:id/cancelar`
+* **Cuerpo (JSON):** `{ "motivo": "Motivo opcional" }`
+* **Efecto:** Cambia el estado a `'cancelado'` y notifica internamente al puerto 3001.
+
+#### 4. Buscar o crear cliente conversacional
 * **Método:** `POST`
 * **Ruta:** `/api/webhooks/clientes/find-or-create`
+* **Cuerpo (JSON):** `{ "restaurante_id": "uuid", "telefono": "9991234567", "nombre": "...", "apellidos": "..." }`
 
-#### 4. Obtener direcciones de un cliente
+#### 5. Obtener cliente por teléfono
+* **Método:** `GET`
+* **Ruta:** `/api/webhooks/clientes/:restauranteId/telefono/:telefono`
+
+#### 6. Obtener direcciones del cliente
 * **Método:** `GET`
 * **Ruta:** `/api/webhooks/clientes/:clienteId/direcciones`
-* **Comportamiento especial:** Retorna la lista de direcciones del cliente y destaca en el cálculo cuál es la `"direccionMasUsada"` basándose en compras previas.
+* **Estructura devuelta:** Listado de direcciones y el objeto `direccionMasUsada` basado en pedidos previos.
 
-#### 5. Obtener contexto unificado para IA (Llamada todo en uno)
+#### 7. Registrar nueva dirección del cliente
+* **Método:** `POST`
+* **Ruta:** `/api/webhooks/clientes/:clienteId/direcciones`
+
+#### 8. Establecer dirección predeterminada
+* **Método:** `PATCH`
+* **Ruta:** `/api/webhooks/clientes/:clienteId/direcciones/:dirId/predeterminada`
+
+#### 9. Obtener contexto unificado para IA (Llamada todo-en-uno)
 * **Método:** `GET`
 * **Ruta:** `/api/webhooks/contexto/:restauranteId/:telefono`
-* **Uso:** Retorna en una sola petición: información del cliente, productos inactivos (agotados), el estado de la conversación y el historial reciente de chat.
+* **Retorna:**
+```json
+{
+  "ok": true,
+  "contexto": {
+    "cliente_nombre": "Isaac Perez",
+    "cliente_telefono": "9994940808",
+    "cliente_id": "uuid-cliente",
+    "restaurante_id": "uuid-restaurante",
+    "conversacion_id": "uuid-conversacion",
+    "productos_no_disponibles": ["Boneless"],
+    "reserva_activa": null,
+    "direcciones_guardadas": [
+      {
+        "id": "uuid-dir",
+        "direccion": "Calle 20 x 15 y 17",
+        "referencias": "Casa amarilla",
+        "alias": "Casa",
+        "predeterminada": true
+      }
+    ],
+    "direccion_sugerida": "Calle 20 x 15 y 17",
+    "dia_semana": "sábado",
+    "hora_actual": "14:58",
+    "historial": []
+  }
+}
+```
 
-#### 6. Reservar mesa por Bot
+#### 10. Gestionar conversaciones y mensajería
+* **GET** `/api/webhooks/conversaciones/:restId/:clienteId/historial`: Recupera el historial.
+* **POST** `/api/webhooks/conversaciones/mensajes`: Registra un mensaje enviado por el cliente o el bot en el historial.
+* **PATCH** `/api/webhooks/conversaciones/:id/cerrar`: Cierra la conversación activa para reiniciar el historial en el siguiente contacto.
+* **GET** `/api/webhooks/conversaciones/:id/mensajes/buscar?q=...`: Busca términos de chat.
+
+#### 11. Reservar mesa por Bot
 * **Método:** `POST`
 * **Ruta:** `/api/webhooks/reservas`
+* **Cuerpo (JSON):** `{ "restaurante_id": "...", "cliente_id": "...", "fecha": "YYYY-MM-DD", "hora": "HH:MM:SS", "num_personas": 4, "notas": "..." }`
 
-#### 7. Modificar reserva activa
+#### 12. Modificar reserva activa
 * **Método:** `PATCH`
 * **Ruta:** `/api/webhooks/reservas/:id`
-* **⚠️ Regla de Negocio:** Para poder modificar detalles de una reserva, la petición debe realizarse con **al menos 5 horas de anticipación** respecto a la fecha y hora agendada. De lo contrario, el backend retornará error.
+* **⚠️ Regla de Negocio:** Para poder modificar una reserva (fecha, hora, personas), el cliente debe solicitarlo con **al menos 5 horas de anticipación** a la hora reservada. De lo contrario, se deniega la petición con error 400.
 
-#### 8. Listar reservas con filtros (para Bot/n8n)
+#### 13. Obtener última reserva del cliente
 * **Método:** `GET`
-* **Ruta:** `/api/webhooks/reservas`
-* **Descripción:** Mismo comportamiento y parámetros de filtrado que `/api/reservas` en el servidor de cocina (puerto 3001). Acepta query params como `fecha` (YYYY-MM-DD), `restaurante_id`, `estado`, `cliente_id`, `limit` y `offset`.
+* **Ruta:** `/api/webhooks/reservas/buscar/ultima`
 
 ---
 
-## 4. Comunicación en Tiempo Real mediante Server-Sent Events (SSE)
+## 4. Flujo en Tiempo Real (Server-Sent Events)
 
-Para mantener la pantalla de cocina sincronizada en tiempo real sin recargar la página, se utiliza la ruta `GET /api/pedidos/stream`.
+El endpoint `GET /api/pedidos/stream` (puerto 3001) mantiene a los clientes conectados recibiendo eventos persistentes en formato texto.
 
-### Eventos Emitidos por el Servidor:
+### Estructura de Eventos:
 
-| Evento | Cuándo se dispara | Payload (`data`) |
+| Evento | Payload (`data`) | Disparador |
 | :--- | :--- | :--- |
-| `nuevo_pedido` | Cuando n8n notifica al servidor de cocina sobre una nueva orden completada en WhatsApp. | El objeto `Pedido` completo. |
-| `pedido_actualizado` | Cuando se cambia el estado del pedido (ej. de pendiente a preparación) o se crea un pedido de prueba. | El objeto `Pedido` modificado. |
-| `pedido_eliminado` | Cuando se borra un pedido del panel administrativo de cocina. | El `id` (UUID) del pedido eliminado. |
-
-### ⚠️ ERROR DETECTADO EN EL FRONT-END ACTUAL (Importante de solucionar)
-
-Al revisar el archivo del front-end `front/restaurant_bot_frontend/src/services/api.ts#L47-L62`, observamos el siguiente código:
-
-```typescript
-  listenToUpdates(
-    onUpdate: (pedido: Pedido) => void, 
-    onDelete: (id: string) => void
-  ) {
-    const evtSource = new EventSource(`${API_URL}/stream`);
-    
-    evtSource.addEventListener('pedido_actualizado', (e) => {
-      onUpdate(JSON.parse(e.data));
-    });
-
-    evtSource.addEventListener('pedido_eliminado', (e) => {
-      onDelete(JSON.parse(e.data));
-    });
-
-    return () => evtSource.close();
-  }
-```
-
-#### El Problema:
-El front-end **no escucha** el evento `'nuevo_pedido'`. Esto significa que cuando un cliente realiza una compra por WhatsApp y n8n la registra de forma exitosa, la pantalla de cocina **no mostrará la tarjeta de forma automática**, a menos que el usuario recargue manualmente la pantalla o se fuerce un refresco.
-
-#### La Solución:
-El agente de front-end debe registrar un listener adicional para `'nuevo_pedido'`, vinculándolo al mismo callback de inserción (`onUpdate` o una función de inserción nueva):
-
-```typescript
-    evtSource.addEventListener('nuevo_pedido', (e) => {
-      onUpdate(JSON.parse(e.data));
-    });
-```
+| `nuevo_pedido` | Objeto `Pedido` completo con detalles, cliente y dirección. | Cuando n8n o un test crea un pedido y notifica al puerto 3001. |
+| `pedido_actualizado` | Objeto `Pedido` con las propiedades modificadas. | Al actualizar estado del pedido en cocina (`PATCH /api/pedidos/:id`). |
+| `pedido_eliminado` | `id` (UUID en formato string) del pedido eliminado. | Al eliminar físicamente un pedido (`DELETE /api/pedidos/:id`). |
 
 ---
 
-## 5. Resumen de Reglas y Directrices para el Agente del Front-End
+## 5. Directrices de Desarrollo y Control de Errores
 
-Cuando construyas, depures o extiendas la interfaz del front-end, ten en cuenta:
-
-1. **Host y URLs de Conexión:**
-   * Las llamadas de gestión de cocina deben ir al puerto `3001` (`/api/pedidos`, `/api/menu`, etc.).
-   * Si desarrollas simuladores de chat o buscas historiales de conversación, las llamadas deben ir al puerto `3002` (`/api/webhooks/...`).
-2. **Validación de Respuestas:**
-   * Todas las respuestas HTTP del backend envuelven sus datos con la propiedad `{ ok: true, data: ... }` o `{ ok: true, categorias: ... }`. En caso de fallo, retornan `{ ok: false, error: 'MOTIVO_ERROR', message: 'Detalle del error' }`. Comprueba siempre la propiedad `ok` antes de procesar.
-3. **Flujo de Estados:**
-   * Sigue la secuencia de estados en orden lógico: `pendiente` ➡️ `confirmado` (si aplica) ➡️ `en_preparacion` ➡️ `entregado`.
-   * Los botones de acción deben deshabilitarse o cambiar de forma dinámica según el estado del pedido actual (ej. no permitir "Comenzar a preparar" si ya está "entregado").
-4. **Modificación de disponibilidad:**
-   * Recuerda que el endpoint `PATCH /api/productos/:id/disponibilidad` actúa como un interruptor ("toggle"). Al llamarlo, el estado actual de `activo` en base de datos cambiará a su opuesto.
-5. **IDs e Identificadores:**
-   * Todos los IDs de pedidos, productos, clientes y sucursales son UUIDs válidos. Al simular o probar endpoints en desarrollo, asegúrate de recuperar un ID existente en la base de datos PostgreSQL.
+1. **Estructura de respuesta HTTP estándar:**
+   * Éxito: `{ ok: true, data/pedido/reservas: ... }`
+   * Error: `{ ok: false, error: 'CODIGO_ERROR', message: 'Mensaje descriptivo' }`
+2. **Ciclo de Estados de Pedido:**
+   * La secuencia recomendada es `pendiente` ➡️ `confirmado` (si aplica) ➡️ `en_preparacion` ➡️ `entregado`. Un pedido cancelado rompe esta secuencia y finaliza de inmediato.
+3. **Manejo de Zonas Horarias e ISO Parsing:**
+   * Las fechas de reservaciones enviadas por n8n (`fecha + 'T' + hora`) se interpretan explícitamente en el huso de referencia UTC de base de datos añadiendo la bandera `'Z'`. Esto neutraliza la diferencia horaria de los servidores Docker respecto a la hora local de Mérida (UTC-6) y previene falsos positivos en la validación de fechas pasadas.

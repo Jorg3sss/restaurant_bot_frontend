@@ -40,23 +40,39 @@ export function PedidosPage() {
     // 1. Cargar pedidos iniciales
     pedidosService.getAll()
       .then(data => {
-        setPedidos(data)
+        setPedidos(Array.isArray(data) ? data : [])
         setLoading(false)
       })
-      .catch(err => console.error("Error al cargar pedidos:", err))
+      .catch(err => {
+        console.error("Error al cargar pedidos:", err)
+        setLoading(false)
+      })
 
     // 2. Conectar a SSE
     const cleanup = pedidosService.listenToUpdates(
       (pedidoActualizado) => {
+        if (!pedidoActualizado || !pedidoActualizado.id) return
         setPedidos(prev => {
           const index = prev.findIndex(p => p.id === pedidoActualizado.id)
           if (index !== -1) {
             const newPedidos = [...prev]
-            newPedidos[index] = { ...newPedidos[index], ...pedidoActualizado }
+            const existing = newPedidos[index]
+            const productos = (Array.isArray(pedidoActualizado.productos) && pedidoActualizado.productos.length > 0)
+              ? pedidoActualizado.productos
+              : (Array.isArray(existing.productos) ? existing.productos : [])
+            
+            newPedidos[index] = { 
+              ...existing, 
+              ...pedidoActualizado, 
+              productos,
+              cliente_nombre: pedidoActualizado.cliente_nombre || existing.cliente_nombre,
+              cliente_telefono: pedidoActualizado.cliente_telefono || existing.cliente_telefono,
+            }
             return newPedidos
           } else {
             // Si es un pedido nuevo, lo agregamos al inicio
-            return [pedidoActualizado, ...prev]
+            const productos = Array.isArray(pedidoActualizado.productos) ? pedidoActualizado.productos : []
+            return [{ ...pedidoActualizado, productos }, ...prev]
           }
         })
       },
@@ -102,95 +118,119 @@ export function PedidosPage() {
           <div className="text-center text-gray-500 mt-20 text-lg">No hay pedidos registrados hoy.</div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-            {pedidos.map((pedido) => (
-              <div key={pedido.id} className="relative pt-3">
-                {/* Badge Animado de estado que se sobrepone (z-20) */}
-                <AnimatedStatusBadge 
-                  trigger={animatingCardId === pedido.id} 
-                  onAnimationComplete={() => setAnimatingCardId(null)}
-                />
+            {pedidos.map((pedido) => {
+              const productos = Array.isArray(pedido.productos) ? pedido.productos : []
+              const pedidoNum = pedido.numero_pedido || (pedido.id && typeof pedido.id === 'string' ? pedido.id.split('-')[0] : 'N/A')
+              const horaFormateada = pedido.created_at ? (
+                (() => {
+                  try {
+                    return new Date(pedido.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})
+                  } catch {
+                    return ''
+                  }
+                })()
+              ) : ''
 
-                <Card className="h-full flex flex-col relative z-10 overflow-hidden shadow-md hover:shadow-xl transition-shadow duration-300 border-gray-200">
-                  {/* Badge de estado estático siempre visible en la esquina superior izquierda */}
-                  <div className={cn(
-                    "absolute top-0 left-0 px-3 py-1 rounded-br-lg text-xs font-bold border-b border-r shadow-sm", 
-                    getStatusColor(pedido.estado)
-                  )}>
-                    {getStatusName(pedido.estado)}
-                  </div>
+              return (
+                <div key={pedido.id || Math.random()} className="relative pt-3">
+                  {/* Badge Animado de estado que se sobrepone (z-20) */}
+                  <AnimatedStatusBadge 
+                    trigger={animatingCardId === pedido.id} 
+                    onAnimationComplete={() => setAnimatingCardId(null)}
+                  />
 
-                  <CardHeader className="pb-3 pt-10 bg-white">
-                    <div className="flex justify-between items-start">
-                      <CardTitle className="text-2xl font-bold text-gray-800">
-                        Pedido #{pedido.numero_pedido || pedido.id.split('-')[0]}
-                      </CardTitle>
-                      <div className="flex items-center space-x-2">
-                        <span className="text-sm font-bold text-gray-500">
-                          {new Date(pedido.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                        </span>
-                        <span className="text-xs font-bold bg-gray-800 text-white px-3 py-1 rounded-full shadow-sm">
-                          {pedido.tipo === 'recoger' ? 'PICK UP' : 'DELIVERY'}
-                        </span>
+                  <Card className="h-full flex flex-col relative z-10 overflow-hidden shadow-md hover:shadow-xl transition-shadow duration-300 border-gray-200">
+                    {/* Badge de estado estático siempre visible en la esquina superior izquierda */}
+                    <div className={cn(
+                      "absolute top-0 left-0 px-3 py-1 rounded-br-lg text-xs font-bold border-b border-r shadow-sm", 
+                      getStatusColor(pedido.estado)
+                    )}>
+                      {getStatusName(pedido.estado)}
+                    </div>
+
+                    <CardHeader className="pb-3 pt-10 bg-white">
+                      <div className="flex justify-between items-start">
+                        <CardTitle className="text-2xl font-bold text-gray-800">
+                          Pedido #{pedidoNum}
+                        </CardTitle>
+                        <div className="flex items-center space-x-2">
+                          {horaFormateada && (
+                            <span className="text-sm font-bold text-gray-500">
+                              {horaFormateada}
+                            </span>
+                          )}
+                          <span className="text-xs font-bold bg-gray-800 text-white px-3 py-1 rounded-full shadow-sm">
+                            {pedido.tipo === 'recoger' ? 'PICK UP' : 'DELIVERY'}
+                          </span>
+                        </div>
                       </div>
-                    </div>
-                    <div className="pt-2 text-sm text-gray-600 flex items-center space-x-2">
-                      <span className="font-bold text-gray-900">Cliente: {pedido.cliente_nombre || 'Desconocido'}</span>
-                      <span className="text-gray-300">•</span>
-                      <span className="font-mono bg-gray-100 px-2 py-0.5 rounded text-xs">{pedido.cliente_telefono}</span>
-                    </div>
-                  </CardHeader>
-                  
-                  <CardContent className="flex-grow space-y-3 bg-white">
-                    <div className="bg-gray-50 rounded-lg p-5 border border-gray-100 shadow-inner">
-                      <ul className="space-y-4">
-                        {pedido.productos.map((prod, idx) => (
-                          <li key={idx} className="flex justify-between text-sm">
-                            <div className="flex space-x-3 w-full">
-                              <span className="font-bold text-lg text-black h-min">{prod.cantidad}x</span>
-                              <div className="flex flex-col flex-1">
-                                <span className="font-bold text-gray-800 text-base">{prod.nombre}</span>
-                                
-                                {prod.extras && prod.extras.length > 0 && (
-                                  <div className="mt-1 bg-red-50 border border-red-100 text-red-800 text-xs px-2 py-1 rounded-md font-medium">
-                                    <span className="uppercase text-[10px] font-black mr-1 text-red-600">EXTRAS:</span>
-                                    {prod.extras.join(', ')}
-                                  </div>
-                                )}
+                      <div className="pt-2 text-sm text-gray-600 flex items-center space-x-2">
+                        <span className="font-bold text-gray-900">Cliente: {pedido.cliente_nombre || 'Desconocido'}</span>
+                        {pedido.cliente_telefono && (
+                          <>
+                            <span className="text-gray-300">•</span>
+                            <span className="font-mono bg-gray-100 px-2 py-0.5 rounded text-xs">{pedido.cliente_telefono}</span>
+                          </>
+                        )}
+                      </div>
+                    </CardHeader>
+                    
+                    <CardContent className="flex-grow space-y-3 bg-white">
+                      <div className="bg-gray-50 rounded-lg p-5 border border-gray-100 shadow-inner">
+                        {productos.length === 0 ? (
+                          <p className="text-xs text-gray-400 italic">Sin productos especificados</p>
+                        ) : (
+                          <ul className="space-y-4">
+                            {productos.map((prod, idx) => (
+                              <li key={idx} className="flex justify-between text-sm">
+                                <div className="flex space-x-3 w-full">
+                                  <span className="font-bold text-lg text-black h-min">{prod.cantidad || 1}x</span>
+                                  <div className="flex flex-col flex-1">
+                                    <span className="font-bold text-gray-800 text-base">{prod.nombre || 'Producto'}</span>
+                                    
+                                    {Array.isArray(prod.extras) && prod.extras.length > 0 && (
+                                      <div className="mt-1 bg-red-50 border border-red-100 text-red-800 text-xs px-2 py-1 rounded-md font-medium">
+                                        <span className="uppercase text-[10px] font-black mr-1 text-red-600">EXTRAS:</span>
+                                        {prod.extras.join(', ')}
+                                      </div>
+                                    )}
 
-                                {prod.notas && (
-                                  <div className="mt-1 bg-gray-50 border border-gray-200 text-gray-500 text-xs px-2 py-1 rounded-md font-medium">
-                                    <span className="uppercase text-[10px] font-black mr-1 text-gray-400">NOTA:</span>
-                                    {prod.notas}
+                                    {prod.notas && (
+                                      <div className="mt-1 bg-gray-50 border border-gray-200 text-gray-500 text-xs px-2 py-1 rounded-md font-medium">
+                                        <span className="uppercase text-[10px] font-black mr-1 text-gray-400">NOTA:</span>
+                                        {prod.notas}
+                                      </div>
+                                    )}
                                   </div>
-                                )}
-                              </div>
-                            </div>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  </CardContent>
+                                </div>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    </CardContent>
 
-                  <CardFooter className="bg-gray-50/80 border-t border-gray-200 p-5 flex flex-wrap gap-3 justify-end mt-auto">
-                    {pedido.estado === 'pendiente' && (
-                      <Button onClick={() => handleCambiarEstado(pedido.id, 'en_preparacion')} className="w-full sm:w-auto bg-green-600 hover:bg-green-700 text-white shadow-md font-semibold">
-                        Comenzar a Preparar
-                      </Button>
-                    )}
-                    {pedido.estado === 'en_preparacion' && (
-                      <Button onClick={() => handleCambiarEstado(pedido.id, 'entregado')} className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white shadow-md font-semibold">
-                        Marcar Listo / Entregado
-                      </Button>
-                    )}
-                    {(pedido.estado === 'pendiente' || pedido.estado === 'en_preparacion') && (
-                      <Button onClick={() => handleCambiarEstado(pedido.id, 'cancelado')} variant="destructive" className="w-full sm:w-auto shadow-sm font-semibold sm:ml-auto">
-                        Cancelar Pedido
-                      </Button>
-                    )}
-                  </CardFooter>
-                </Card>
-              </div>
-            ))}
+                    <CardFooter className="bg-gray-50/80 border-t border-gray-200 p-5 flex flex-wrap gap-3 justify-end mt-auto">
+                      {pedido.estado === 'pendiente' && (
+                        <Button onClick={() => handleCambiarEstado(pedido.id, 'en_preparacion')} className="w-full sm:w-auto bg-green-600 hover:bg-green-700 text-white shadow-md font-semibold">
+                          Comenzar a Preparar
+                        </Button>
+                      )}
+                      {pedido.estado === 'en_preparacion' && (
+                        <Button onClick={() => handleCambiarEstado(pedido.id, 'entregado')} className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white shadow-md font-semibold">
+                          Marcar Listo / Entregado
+                        </Button>
+                      )}
+                      {(pedido.estado === 'pendiente' || pedido.estado === 'en_preparacion') && (
+                        <Button onClick={() => handleCambiarEstado(pedido.id, 'cancelado')} variant="destructive" className="w-full sm:w-auto shadow-sm font-semibold sm:ml-auto">
+                          Cancelar Pedido
+                        </Button>
+                      )}
+                    </CardFooter>
+                  </Card>
+                </div>
+              )
+            })}
           </div>
         )}
       </div>
