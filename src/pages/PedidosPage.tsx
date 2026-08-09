@@ -2,9 +2,17 @@ import { useEffect, useState } from 'react'
 import { pedidosService, type Pedido } from '../services/api'
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from '../components/ui/card'
 import { Button } from '../components/ui/button'
-import { AnimatedStatusBadge } from '../components/ui/animated-status-badge'
 import { Loader2 } from 'lucide-react'
 import { cn } from '../lib/utils'
+import { AlertToast } from '../components/ui/alert-toast'
+import { AnimatePresence } from 'framer-motion'
+
+interface ToastMessage {
+  id: number;
+  variant: 'success' | 'error' | 'warning' | 'info';
+  title: string;
+  description: string;
+}
 
 // Utilidad para color de estados
 const getStatusColor = (estado: string) => {
@@ -33,8 +41,16 @@ const getStatusName = (estado: string) => {
 export function PedidosPage() {
   const [pedidos, setPedidos] = useState<Pedido[]>([])
   const [loading, setLoading] = useState(true)
-  // Estado para controlar qué tarjeta está animándose
-  const [animatingCardId, setAnimatingCardId] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState<'activos' | 'finalizados' | 'cancelados'>('activos')
+  const [toasts, setToasts] = useState<ToastMessage[]>([])
+
+  const addToast = (variant: 'success' | 'error' | 'warning' | 'info', title: string, description: string) => {
+    const id = Date.now()
+    setToasts(prev => [...prev, { id, variant, title, description }])
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id))
+    }, 5000)
+  }
 
   useEffect(() => {
     // 1. Cargar pedidos iniciales
@@ -86,10 +102,13 @@ export function PedidosPage() {
 
   const handleCambiarEstado = async (id: string, nuevoEstado: string) => {
     try {
-      setAnimatingCardId(id) // Dispara la animación en la tarjeta específica
       await pedidosService.updateEstado(id, nuevoEstado)
+      if (nuevoEstado === 'entregado' || nuevoEstado === 'cancelado') {
+        addToast('success', '¡Estado actualizado!', `El pedido ha sido marcado como ${nuevoEstado}.`)
+      }
     } catch (error) {
       console.error("Error al actualizar:", error)
+      addToast('error', 'Error al actualizar', 'Ocurrió un problema al cambiar el estado del pedido.')
     }
   }
 
@@ -105,21 +124,77 @@ export function PedidosPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-100 p-6 font-sans">
+    <div className="min-h-screen bg-gray-100 p-6 font-sans relative">
+      {/* Contenedor de Toasts (Notificaciones) */}
+      <div className="fixed bottom-6 right-6 z-50 flex flex-col space-y-3 pointer-events-none">
+        <AnimatePresence>
+          {toasts.map(toast => (
+            <div key={toast.id} className="pointer-events-auto">
+              <AlertToast
+                variant={toast.variant}
+                title={toast.title}
+                description={toast.description}
+                onClose={() => setToasts(prev => prev.filter(t => t.id !== toast.id))}
+              />
+            </div>
+          ))}
+        </AnimatePresence>
+      </div>
+
       <div className="max-w-6xl mx-auto space-y-6">
-        <header className="flex justify-between items-center mb-8 bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+        <header className="flex justify-between items-center mb-6 bg-white p-6 rounded-xl shadow-sm border border-gray-200">
           <div>
             <h1 className="text-3xl font-black text-gray-900 tracking-tight">Pantalla de Cocina</h1>
             <p className="text-gray-500 text-sm mt-1">Gestión de pedidos en tiempo real</p>
           </div>
         </header>
 
-        {pedidos.length === 0 ? (
-          <div className="text-center text-gray-500 mt-20 text-lg">No hay pedidos registrados hoy.</div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-            {pedidos.map((pedido) => {
-              const productos = Array.isArray(pedido.productos) ? pedido.productos : []
+        <div className="flex space-x-2 mb-6">
+          <Button 
+            variant={activeTab === 'activos' ? 'default' : 'outline'} 
+            onClick={() => setActiveTab('activos')}
+            className="font-semibold"
+          >
+            Activos
+          </Button>
+          <Button 
+            variant={activeTab === 'finalizados' ? 'default' : 'outline'} 
+            onClick={() => setActiveTab('finalizados')}
+            className="font-semibold"
+          >
+            Finalizados
+          </Button>
+          <Button 
+            variant={activeTab === 'cancelados' ? 'default' : 'outline'} 
+            onClick={() => setActiveTab('cancelados')}
+            className="font-semibold"
+          >
+            Cancelados
+          </Button>
+        </div>
+
+        {(() => {
+          const pedidosFiltrados = pedidos.filter(p => {
+            if (activeTab === 'activos') {
+              return ['pendiente', 'confirmado', 'en_preparacion'].includes(p.estado)
+            }
+            if (activeTab === 'finalizados') {
+              return p.estado === 'entregado'
+            }
+            if (activeTab === 'cancelados') {
+              return p.estado === 'cancelado'
+            }
+            return true
+          })
+
+          if (pedidosFiltrados.length === 0) {
+            return <div className="text-center text-gray-500 mt-20 text-lg font-medium">No hay pedidos en esta sección.</div>
+          }
+
+          return (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+              {pedidosFiltrados.map((pedido) => {
+                const productos = Array.isArray(pedido.productos) ? pedido.productos : []
               const pedidoNum = pedido.numero_pedido || (pedido.id && typeof pedido.id === 'string' ? pedido.id.split('-')[0] : 'N/A')
               const horaFormateada = pedido.created_at ? (
                 (() => {
@@ -133,11 +208,7 @@ export function PedidosPage() {
 
               return (
                 <div key={pedido.id || Math.random()} className="relative pt-3">
-                  {/* Badge Animado de estado que se sobrepone (z-20) */}
-                  <AnimatedStatusBadge 
-                    trigger={animatingCardId === pedido.id} 
-                    onAnimationComplete={() => setAnimatingCardId(null)}
-                  />
+
 
                   <Card className="h-full flex flex-col relative z-10 overflow-hidden shadow-md hover:shadow-xl transition-shadow duration-300 border-gray-200">
                     {/* Badge de estado estático siempre visible en la esquina superior izquierda */}
@@ -230,9 +301,10 @@ export function PedidosPage() {
                   </Card>
                 </div>
               )
-            })}
-          </div>
-        )}
+              })}
+            </div>
+          )
+        })()}
       </div>
     </div>
   )
