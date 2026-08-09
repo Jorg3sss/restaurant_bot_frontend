@@ -1,6 +1,6 @@
 import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
-import { motion } from "framer-motion";
+import { motion, HTMLMotionProps } from "framer-motion";
 import { cn } from "../../lib/utils";
 import { CheckCircle2, AlertTriangle, Info, XOctagon, X } from "lucide-react";
 
@@ -36,7 +36,7 @@ const iconColorClasses = {
 };
 
 export interface AlertToastProps
-  extends React.HTMLAttributes<HTMLDivElement>,
+  extends HTMLMotionProps<"div">,
     VariantProps<typeof alertToastVariants> {
   title: string;
   description: string;
